@@ -1,0 +1,227 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum BattleStatus {
+  LOBBY
+  STARTING
+  IN_PROGRESS
+  VOTING
+  JUDGING
+  COMPLETED
+  CANCELLED
+}
+
+enum BattleMode {
+  HEAD_TO_HEAD
+  TEAM
+  FREE_FOR_ALL
+}
+
+// Agent Model
+// Represents AI agents that can participate in battles
+model Agent {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(255)
+  displayName String   @db.VarChar(100)
+  description String?  @db.Text
+  apiKeyHash  String   @unique @map("api_key_hash") // Stored as bcrypt hash with cost factor 12
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  isActive    Boolean  @default(true)
+
+  // Battle participation
+  participants     BattleParticipant[]
+  turns            BattleTurn[]
+  votes            Vote[]           @relation("VoterVotes")
+  votesReceived    Vote[]           @relation("VotedFor")
+  feedbackGiven    AgentFeedback[]  @relation("FeedbackFrom")
+  feedbackReceived AgentFeedback[]  @relation("FeedbackTo")
+
+  // Security: Explicit indexes on all foreign key columns
+  @@index([name])
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+// Battle Model
+// Represents a battle session between agents
+model Battle {
+  id               String       @id @default(uuid()) @db.Uuid
+  roomCode         String       @unique @db.VarChar(20)
+  topic            String       @db.VarChar(500)
+  status           BattleStatus @default(LOBBY)
+  mode             BattleMode   @default(HEAD_TO_HEAD)
+  maxParticipants  Int          @default(2)
+  turnDurationMs   Int          @default(30000) // 30 seconds
+  maxTurns         Int          @default(10)
+  currentTurn      Int          @default(0)
+
+  // AI features
+  enableJudge      Boolean  @default(true)
+  enableCommentator Boolean @default(true)
+  enableTTS        Boolean  @default(false)
+
+  // Timestamps
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  startedAt        DateTime?
+  completedAt      DateTime?
+
+  // Result
+  winnerId         String?  @db.Uuid
+  judgeReasoning   String?  @db.Text
+
+  // Relations
+  participants     BattleParticipant[]
+  turns            BattleTurn[]
+  votes            Vote[]
+  feedback         AgentFeedback[]
+
+  // Security: Explicit indexes on all foreign key columns
+  // Composite indexes for common query patterns
+  @@index([roomCode])
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt]) // Composite index for active battles query
+  @@index([status, mode]) // HIGH priority composite index
+  @@index([winnerId])
+
+  // Note: CHECK constraints added via raw SQL migration (Prisma 6 doesn't support @@check)
+  // - maxParticipants > 0 AND maxParticipants <= 10
+  // - maxTurns > 0 AND maxTurns <= 100
+}
+
+// BattleParticipant Model
+// Join table for battles and agents with participant-specific data
+model BattleParticipant {
+  id        String   @id @default(uuid()) @db.Uuid
+  battleId  String   @db.Uuid
+  agentId   String   @db.Uuid
+  teamId    String?  @db.VarChar(50) // For TEAM mode
+  position  Int      // 1, 2, 3, etc. for turn order
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  isActive  Boolean  @default(true)
+
+  // Relations with ON DELETE constraints
+  battle    Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  // Security: Explicit indexes on all foreign key columns
+  // Composite indexes for common query patterns
+  @@index([battleId])
+  @@index([agentId])
+  @@index([teamId])
+  @@index([battleId, agentId]) // Composite index for participant lookup
+  @@index([battleId, position]) // Composite index for turn order
+  @@unique([battleId, agentId]) // Prevent duplicate participation
+}
+
+// BattleTurn Model
+// Represents each turn/argument in a battle
+model BattleTurn {
+  id              String   @id @default(uuid()) @db.Uuid
+  battleId        String   @db.Uuid
+  agentId         String   @db.Uuid
+  turnNumber      Int
+  content         String   @db.Text // Sanitized with DOMPurify
+  audioUrl        String?  @db.VarChar(500) // TTS audio file path
+  createdAt       DateTime @default(now())
+  durationMs      Int?     // Actual duration taken
+
+  // AI commentary
+  commentary      String?  @db.Text
+
+  // Relations with ON DELETE constraints
+  battle          Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  agent           Agent    @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  // Security: Explicit indexes on all foreign key columns
+  // Composite indexes for common query patterns
+  @@index([battleId])
+  @@index([agentId])
+  @@index([battleId, turnNumber]) // Composite index for turn sequence
+  @@index([createdAt])
+  @@unique([battleId, turnNumber]) // Ensure turn number uniqueness per battle
+}
+
+// Vote Model
+// Tracks votes from agents or audience
+model Vote {
+  id              String   @id @default(uuid()) @db.Uuid
+  battleId        String   @db.Uuid
+  voterId         String?  @db.Uuid // NULL for anonymous audience votes
+  targetAgentId   String   @db.Uuid // Agent being voted for
+  idempotencyKey  String   @unique @db.VarChar(255) // Prevent duplicate votes
+  createdAt       DateTime @default(now())
+
+  // Relations with ON DELETE constraints
+  battle          Battle   @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  voter           Agent?   @relation("VoterVotes", fields: [voterId], references: [id], onDelete: Restrict)
+  targetAgent     Agent    @relation("VotedFor", fields: [targetAgentId], references: [id], onDelete: Restrict)
+
+  // Security: Explicit indexes on all foreign key columns
+  // Composite indexes for common query patterns
+  @@index([battleId])
+  @@index([voterId])
+  @@index([targetAgentId])
+  @@index([battleId, voterId]) // Composite index for vote lookup
+  @@index([idempotencyKey])
+  @@unique([battleId, voterId]) // One vote per battle per voter
+}
+
+// AgentFeedback Model
+// Post-battle feedback between agents
+model AgentFeedback {
+  id          String   @id @default(uuid()) @db.Uuid
+  fromAgentId String   @db.Uuid
+  toAgentId   String   @db.Uuid
+  battleId    String?  @db.Uuid // Optional battle context
+  rating      Int      @db.Integer // 1-5 stars
+  comment     String?  @db.Text // Sanitized with DOMPurify
+  createdAt   DateTime @default(now())
+
+  // Relations with ON DELETE constraints
+  fromAgent   Agent    @relation("FeedbackFrom", fields: [fromAgentId], references: [id], onDelete: Restrict)
+  toAgent     Agent    @relation("FeedbackTo", fields: [toAgentId], references: [id], onDelete: Restrict)
+  battle      Battle?  @relation(fields: [battleId], references: [id], onDelete: SetNull)
+
+  // Security: Explicit indexes on all foreign key columns
+  // Composite indexes for common query patterns
+  @@index([fromAgentId])
+  @@index([toAgentId])
+  @@index([battleId])
+  @@index([createdAt])
+  @@index([toAgentId, rating]) // Composite index for reputation queries
+
+  // Note: CHECK constraint added via raw SQL migration (Prisma 6 doesn't support @@check)
+  // - rating >= 1 AND rating <= 5
+}
+
+// Session Model (for Redis backup/persistence)
+// Optional: Store session data in PostgreSQL for persistence
+model Session {
+  id            String   @id @default(uuid()) @db.Uuid
+  sessionId     String   @unique @db.VarChar(255)
+  agentId       String   @db.Uuid
+  data          String   @db.Text // JSON serialized session data
+  signature     String   @db.VarChar(255) // HMAC signature for validation
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Security: Explicit indexes
+  @@index([sessionId])
+  @@index([agentId])
+  @@index([expiresAt]) // For cleanup queries
+}

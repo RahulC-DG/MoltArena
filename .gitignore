@@ -1,0 +1,55 @@
+# MoltArena - Root .gitignore
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies (handled by subdirectories)
+node_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker volumes
+docker-volumes/
+postgres-data/
+redis-data/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Claude/macrodata (if you want to exclude from version control)
+.claude/
