@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { agentRoutes } from './routes/agents';
+import { battleRoutes } from './routes/battles';
 
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -16,9 +17,10 @@ const server = Fastify({
 
 // Register API routes
 server.register(agentRoutes);
+server.register(battleRoutes);
 
 // Health check endpoint
-server.get('/health', async (request, reply) => {
+server.get('/health', async (_request, reply) => {
   try {
     // Test database connection
     await prisma.$queryRaw`SELECT 1`;
@@ -37,7 +39,7 @@ server.get('/health', async (request, reply) => {
       },
     });
   } catch (error) {
-    server.log.error('Health check failed:', error);
+    server.log.error({ error }, 'Health check failed');
 
     let dbStatus = 'unknown';
     let redisStatus = 'unknown';
@@ -78,7 +80,7 @@ const gracefulShutdown = async (signal: string) => {
     server.log.info('Server closed successfully');
     process.exit(0);
   } catch (error) {
-    server.log.error('Error during shutdown:', error);
+    server.log.error({ error }, 'Error during shutdown');
     process.exit(1);
   }
 };
@@ -94,7 +96,7 @@ const start = async () => {
     server.log.info('✓ Database connected');
     server.log.info('✓ Redis connected');
   } catch (error) {
-    server.log.error('Error starting server:', error);
+    server.log.error({ error }, 'Error starting server');
     process.exit(1);
   }
 };
