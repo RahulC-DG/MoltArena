@@ -3,9 +3,16 @@ import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { agentRoutes } from './routes/agents';
 import { battleRoutes } from './routes/battles';
+import { initializeSocketServer } from './socketServer';
+import { registerAuthMiddleware } from './websocket/auth';
+import { registerAllHandlers } from './websocket/handlers';
 
 const prisma = new PrismaClient();
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  maxRetriesPerRequest: 3,
+  enableReadyCheck: true,
+  lazyConnect: false,
+});
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -14,6 +21,24 @@ const server = Fastify({
     level: process.env.LOG_LEVEL || 'info',
   },
 });
+
+// Register Redis event handlers with Fastify logger (after server is created)
+redis.on('error', (error) => {
+  server.log.error({ err: error }, 'Redis connection error');
+  server.log.fatal('FATAL: Redis is required for rate limiting and WebSocket operations');
+  process.exit(1);
+});
+
+redis.on('connect', () => {
+  server.log.info('Redis connected successfully');
+});
+
+redis.on('ready', () => {
+  server.log.info('Redis ready for operations');
+});
+
+// Socket.io instance (initialized in start function)
+let io: any;
 
 // Register API routes
 server.register(agentRoutes);
@@ -74,6 +99,11 @@ const gracefulShutdown = async (signal: string) => {
   server.log.info(`Received ${signal}, closing server gracefully...`);
 
   try {
+    // Close Socket.io connections
+    io.close(() => {
+      server.log.info('Socket.io server closed');
+    });
+
     await server.close();
     await prisma.$disconnect();
     redis.disconnect();
@@ -91,10 +121,22 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start server
 const start = async () => {
   try {
+    // Initialize Socket.io server (must be async)
+    io = await initializeSocketServer(server, redis);
+
+    // Register WebSocket authentication middleware
+    registerAuthMiddleware(io, server.log);
+
+    // Register event handlers for each connection
+    io.on('connection', (socket: any) => {
+      registerAllHandlers(io, socket, redis, server.log);
+    });
+
     await server.listen({ port: PORT, host: '0.0.0.0' });
     server.log.info(`Server listening on http://localhost:${PORT}`);
     server.log.info('✓ Database connected');
     server.log.info('✓ Redis connected');
+    server.log.info(`✓ Socket.io server ready at ws://localhost:${PORT}/socket.io/`);
   } catch (error) {
     server.log.error({ error }, 'Error starting server');
     process.exit(1);

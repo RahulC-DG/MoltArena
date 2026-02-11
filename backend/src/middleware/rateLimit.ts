@@ -68,8 +68,14 @@ export function rateLimit(config: RateLimitConfig) {
       reply.header('X-RateLimit-Remaining', Math.max(0, maxRequests - newCount));
       reply.header('X-RateLimit-Reset', Date.now() + windowMs);
     } catch (error) {
-      // Log error but don't block request on Redis failure
-      request.log.error('Rate limit error:', error);
+      // Fail-fast on Redis errors (don't allow requests without rate limiting)
+      request.log.error({ err: error }, 'Rate limit error - Redis failure');
+      return reply.status(503).send({
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Rate limiting service unavailable',
+        },
+      });
     }
   };
 }

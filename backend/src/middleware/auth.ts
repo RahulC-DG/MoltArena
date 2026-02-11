@@ -48,7 +48,7 @@ export async function requireAuth(
     }
 
     // Find agent by API key (uses bcrypt verification with timing-safe comparison)
-    const agent = await findAgentByApiKey(apiKey);
+    const agent = await findAgentByApiKey(apiKey, request.log);
 
     if (!agent) {
       return reply.status(401).send({
@@ -94,7 +94,7 @@ export async function optionalAuth(
     const apiKey = extractApiKey(request.headers.authorization);
 
     if (apiKey) {
-      const agent = await findAgentByApiKey(apiKey);
+      const agent = await findAgentByApiKey(apiKey, request.log);
       if (agent && agent.isActive) {
         request.agent = agent;
       }

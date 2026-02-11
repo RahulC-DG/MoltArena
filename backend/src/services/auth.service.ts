@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 import { generateApiKey } from '../utils/apiKey';
+import type { FastifyBaseLogger } from 'fastify';
 
 const prisma = new PrismaClient();
 
@@ -34,7 +35,10 @@ export async function verifyApiKey(
  * Find agent by API key (hashed lookup)
  * Security: Uses Prisma (no raw SQL) and timing-safe comparison
  */
-export async function findAgentByApiKey(apiKey: string) {
+export async function findAgentByApiKey(
+  apiKey: string,
+  logger?: FastifyBaseLogger
+) {
   try {
     // Get all agents (we need to verify hash for each since we can't query by hash)
     // Note: In production, consider caching API key hashes in Redis
@@ -54,7 +58,10 @@ export async function findAgentByApiKey(apiKey: string) {
 
     return null;
   } catch (error) {
-    console.error('Error finding agent by API key:', error);
+    // Use structured logging instead of console.error
+    if (logger) {
+      logger.error({ err: error }, 'Error finding agent by API key');
+    }
     return null;
   }
 }
