@@ -8,6 +8,7 @@ import { registerAuthMiddleware } from './websocket/auth';
 import { registerAllHandlers } from './websocket/handlers';
 import { initializeAIClients } from './services/ai';
 import { registerSocketInstance } from './services/socket-registry';
+import { registerRedisInstance } from './services/redis-registry';
 
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -129,8 +130,9 @@ const start = async () => {
     // Initialize Socket.io server (must be async)
     io = await initializeSocketServer(server, redis);
 
-    // Register Socket.io instance for access from routes
+    // Register Socket.io and Redis instances for access from routes
     registerSocketInstance(io);
+    registerRedisInstance(redis);
 
     // Register WebSocket authentication middleware
     registerAuthMiddleware(io, server.log);

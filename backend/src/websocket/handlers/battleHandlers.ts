@@ -251,9 +251,18 @@ export function registerBattleHandlers(
       const { content } = validation;
       const agentId = socket.data.agent!.id;
 
+      // Explicit content validation
+      if (!content || content.trim().length === 0) {
+        socket.emit('error', {
+          code: 'VALIDATION_ERROR',
+          message: 'Turn content is required'
+        });
+        return;
+      }
+
       try {
         // 1. Submit turn to database
-        const turn = await submitTurn(battleId!, agentId, content!, redis, logger);
+        const turn = await submitTurn(battleId!, agentId, content, redis, logger);
 
         // 2. Acknowledge immediately to agent
         socket.emit('battle:turn_accepted', {

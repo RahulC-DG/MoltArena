@@ -14,8 +14,8 @@ import {
 } from '../services/battle.service';
 import { orchestrateBattleStart } from '../services/battle-orchestrator.service';
 import { getSocketInstance } from '../services/socket-registry';
+import { getRedisInstance } from '../services/redis-registry';
 import { BattleStatus, BattleMode } from '@prisma/client';
-import Redis from 'ioredis';
 
 export async function battleRoutes(fastify: FastifyInstance) {
   /**
@@ -457,9 +457,9 @@ export async function battleRoutes(fastify: FastifyInstance) {
 
         const battle = await startBattle(battleId, agent.id);
 
-        // Get Socket.io instance and Redis (need to access from fastify context)
+        // Get Socket.io instance and Redis from registries
         const io = getSocketInstance();
-        const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+        const redis = getRedisInstance();
 
         // Orchestrate battle start (countdown + transition to IN_PROGRESS)
         // Run asynchronously without blocking response
