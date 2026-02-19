@@ -12,7 +12,10 @@ import {
   CreateBattleData,
   BattleFilters,
 } from '../services/battle.service';
+import { orchestrateBattleStart } from '../services/battle-orchestrator.service';
+import { getSocketInstance } from '../services/socket-registry';
 import { BattleStatus, BattleMode } from '@prisma/client';
+import Redis from 'ioredis';
 
 export async function battleRoutes(fastify: FastifyInstance) {
   /**
@@ -45,7 +48,7 @@ export async function battleRoutes(fastify: FastifyInstance) {
         }
 
         // Create battle with creator as host
-        const battle = await createBattle(body, agent.id);
+        const battle = await createBattle(body, agent.id) as any;
 
         return reply.status(201).send({
           battle: {
@@ -134,20 +137,20 @@ export async function battleRoutes(fastify: FastifyInstance) {
           filters.offset = parseInt(query.offset, 10);
         }
 
-        const { battles, total } = await listBattles(filters);
+        const { battles } = await listBattles(filters);
 
         // Filter out private battles unless user is authenticated and a participant
         const agent = request.agent;
-        const filteredBattles = battles.filter(battle => {
+        const filteredBattles = battles.filter((battle: any) => {
           if (!battle.isPrivate) return true;
           if (!agent) return false;
-          return battle.participants.some(p => p.agentId === agent.id);
+          return battle.participants.some((p: any) => p.agentId === agent.id);
         });
 
         return reply.send({
-          battles: filteredBattles.map(battle => {
+          battles: filteredBattles.map((battle: any) => {
             // Only show room code if: public battle OR user is host/participant
-            const isParticipant = agent && battle.participants.some(p => p.agentId === agent.id);
+            const isParticipant = agent && battle.participants.some((p: any) => p.agentId === agent.id);
             const showRoomCode = !battle.isPrivate || isParticipant;
 
             return {
@@ -160,7 +163,7 @@ export async function battleRoutes(fastify: FastifyInstance) {
               currentParticipants: battle.participants.length,
               isPrivate: battle.isPrivate,
               createdAt: battle.createdAt,
-              participants: battle.participants.map(p => ({
+              participants: battle.participants.map((p: any) => ({
                 id: p.id,
                 agentId: p.agentId,
                 agentName: p.agent.displayName,
@@ -173,7 +176,7 @@ export async function battleRoutes(fastify: FastifyInstance) {
           offset: filters.offset || 0,
         });
       } catch (error) {
-        request.log.error('List battles error:', error);
+        request.log.error({ err: error }, 'List battles error');
         return reply.status(500).send({
           error: {
             code: 'INTERNAL_ERROR',
@@ -224,7 +227,7 @@ export async function battleRoutes(fastify: FastifyInstance) {
             });
           }
 
-          const isParticipant = battle.participants.some(p => p.agentId === agent.id);
+          const isParticipant = (battle as any).participants.some((p: any) => p.agentId === agent.id);
           if (!isParticipant) {
             return reply.status(403).send({
               error: {
@@ -252,18 +255,18 @@ export async function battleRoutes(fastify: FastifyInstance) {
             createdAt: battle.createdAt,
             startedAt: battle.startedAt,
             endedAt: battle.endedAt,
-            participants: battle.participants.map(p => ({
+            participants: (battle as any).participants.map((p: any) => ({
               id: p.id,
               agentId: p.agentId,
               agentName: p.agent.displayName,
               isHost: p.isHost,
               joinedAt: p.joinedAt,
             })),
-            turns: battle.turns,
+            turns: (battle as any).turns,
           },
         });
       } catch (error) {
-        request.log.error('Get battle error:', error);
+        request.log.error({ err: error }, 'Get battle error');
         return reply.status(500).send({
           error: {
             code: 'INTERNAL_ERROR',
@@ -454,12 +457,22 @@ export async function battleRoutes(fastify: FastifyInstance) {
 
         const battle = await startBattle(battleId, agent.id);
 
+        // Get Socket.io instance and Redis (need to access from fastify context)
+        const io = getSocketInstance();
+        const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+        // Orchestrate battle start (countdown + transition to IN_PROGRESS)
+        // Run asynchronously without blocking response
+        orchestrateBattleStart(battleId, io, redis, request.log).catch((err) => {
+          request.log.error({ error: err, battleId }, 'Battle orchestration failed');
+        });
+
         return reply.send({
           battle: {
             id: battle.id,
             status: battle.status,
             startedAt: battle.startedAt,
-            participants: battle.participants.map(p => ({
+            participants: (battle as any).participants.map((p: any) => ({
               id: p.id,
               agentId: p.agentId,
               agentName: p.agent.displayName,

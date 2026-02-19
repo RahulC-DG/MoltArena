@@ -6,6 +6,8 @@ import { battleRoutes } from './routes/battles';
 import { initializeSocketServer } from './socketServer';
 import { registerAuthMiddleware } from './websocket/auth';
 import { registerAllHandlers } from './websocket/handlers';
+import { initializeAIClients } from './services/ai';
+import { registerSocketInstance } from './services/socket-registry';
 
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -121,8 +123,14 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start server
 const start = async () => {
   try {
+    // Initialize AI clients (Anthropic and Deepgram)
+    initializeAIClients(server.log);
+
     // Initialize Socket.io server (must be async)
     io = await initializeSocketServer(server, redis);
+
+    // Register Socket.io instance for access from routes
+    registerSocketInstance(io);
 
     // Register WebSocket authentication middleware
     registerAuthMiddleware(io, server.log);
@@ -136,6 +144,7 @@ const start = async () => {
     server.log.info(`Server listening on http://localhost:${PORT}`);
     server.log.info('✓ Database connected');
     server.log.info('✓ Redis connected');
+    server.log.info('✓ AI clients initialized (Anthropic & Deepgram)');
     server.log.info(`✓ Socket.io server ready at ws://localhost:${PORT}/socket.io/`);
   } catch (error) {
     server.log.error({ error }, 'Error starting server');

@@ -1,6 +1,12 @@
 import { Socket, Server } from 'socket.io';
 import Redis from 'ioredis';
-import { getBattleById } from '../../services/battle.service';
+import { getBattleById, transitionToVoting, transitionToJudging, transitionToCompleted } from '../../services/battle.service';
+import { submitTurn, progressToNextRound, startNextTurn } from '../../services/turn.service';
+import { recordVote, getTotalVotes } from '../../services/vote.service';
+import { textToSpeech } from '../../services/ai/tts.service';
+import { generateCommentary } from '../../services/ai/commentator.service';
+import { evaluateBattle } from '../../services/ai/judge.service';
+import { recordTurnMetrics } from '../../services/metrics.service';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   validateBattleJoinPayload,
@@ -58,6 +64,13 @@ export function registerBattleHandlers(
       }
 
       const { battleId } = validation;
+      if (!battleId) {
+        socket.emit('error', {
+          code: 'VALIDATION_ERROR',
+          message: 'Battle ID is required'
+        });
+        return;
+      }
 
       // 2. Validate battle exists
       const battle = await getBattleById(battleId) as any;
@@ -234,17 +247,155 @@ export function registerBattleHandlers(
       // Set rate limit (10 seconds)
       await redis.set(rateLimitKey, '1', 'PX', 10000);
 
-      // TODO: Phase 1E - Implement turn submission logic
-      // For now, just acknowledge receipt
-      socket.emit('battle:turn_accepted', {
-        battleId: battleId!,
-        processing: true
-      });
+      // Phase 1E: Complete turn submission logic
+      const { content } = validation;
+      const agentId = socket.data.agent!.id;
 
-      logger.info({
-        agentId: socket.data.agent!.id,
-        battleId: battleId!
-      }, 'Agent submitted turn');
+      try {
+        // 1. Submit turn to database
+        const turn = await submitTurn(battleId!, agentId, content!, redis, logger);
+
+        // 2. Acknowledge immediately to agent
+        socket.emit('battle:turn_accepted', {
+          battleId: battleId!,
+          turnId: turn.id,
+          turnNumber: turn.turnNumber,
+          processing: true,
+        });
+
+        // 3. Record metrics (non-blocking)
+        recordTurnMetrics(battleId!, agentId, turn.turnNumber, content!, turn.durationMs || 0, logger).catch((err) =>
+          logger.warn({ error: err }, 'Failed to record turn metrics')
+        );
+
+        // 4. Generate TTS for turn (async, non-blocking)
+        const ttsPromise = textToSpeech(content!, 'agent', battleId!, logger);
+
+        // 5. Broadcast turn to all participants (with or without audio)
+        const audioUrl = await ttsPromise.catch(() => null);
+        _io.to(BattleRooms.main(battleId!)).emit('battle:turn', {
+          turnId: turn.id,
+          battleId: battleId!,
+          agentId,
+          turnNumber: turn.turnNumber,
+          content: turn.content,
+          audioUrl: audioUrl || undefined,
+          timestamp: turn.createdAt.toISOString(),
+        });
+
+        // 6. Generate commentary (async, emit when ready)
+        const battle = await getBattleById(battleId!);
+        if (battle && (battle as any).enableCommentator) {
+          generateCommentary(
+            {
+              battleId: battleId!,
+              agentId,
+              agentName: socket.data.agent!.name,
+              position: 'debater',
+              content: content!,
+              round: Math.ceil(turn.turnNumber / 2),
+              totalRounds: (battle as any).maxTurns / 2,
+              previousTurns: [], // TODO: Fetch previous turns if needed
+            },
+            logger
+          )
+            .then((commentary) => {
+              if (commentary.text) {
+                _io.to(BattleRooms.main(battleId!)).emit('battle:commentary', {
+                  battleId: battleId!,
+                  text: commentary.text,
+                  audioUrl: commentary.audioUrl || undefined,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            })
+            .catch((err) => logger.warn({ error: err }, 'Commentary generation failed'));
+        }
+
+        // 7. Check if battle should progress
+        const shouldContinue = await progressToNextRound(battleId!, logger);
+        if (!shouldContinue) {
+          // Max turns reached - transition to VOTING
+          await transitionToVoting(battleId!, logger);
+          _io.to(BattleRooms.main(battleId!)).emit('battle:state', {
+            battleId: battleId!,
+            status: 'VOTING',
+            message: 'Battle complete! Voting period open.',
+          });
+
+          // After 30 seconds, transition to JUDGING
+          setTimeout(async () => {
+            try {
+              await transitionToJudging(battleId!, logger);
+              _io.to(BattleRooms.main(battleId!)).emit('battle:state', {
+                battleId: battleId!,
+                status: 'JUDGING',
+                message: 'Judging in progress...',
+              });
+
+              // Run judge evaluation
+              const decision = await evaluateBattle(battleId!, logger);
+              await transitionToCompleted(battleId!, decision.winnerId, decision.reasoning, logger);
+
+              // Broadcast results
+              _io.to(BattleRooms.main(battleId!)).emit('battle:ended', {
+                battleId: battleId!,
+                winnerId: decision.winnerId,
+                scores: decision.scores,
+                reasoning: decision.reasoning,
+                confidence: decision.confidence,
+              });
+            } catch (err) {
+              logger.error({ error: err, battleId }, 'Failed to complete battle judging');
+            }
+          }, 30000);
+        } else {
+          // Start next turn
+          const nextTurnInfo = await startNextTurn(battleId!, redis, logger);
+          _io.to(BattleRooms.agents(battleId!)).emit('battle:turn_start', {
+            battleId: battleId!,
+            agentId: nextTurnInfo.agentId,
+            deadline: nextTurnInfo.deadline,
+          });
+
+          // Notify specific agent
+          const agentSockets = await _io.in(BattleRooms.main(battleId!)).fetchSockets();
+          const targetSocket = agentSockets.find((s: any) => s.data.agent?.id === nextTurnInfo.agentId);
+          if (targetSocket) {
+            targetSocket.emit('battle:your_turn', {
+              battleId: battleId!,
+              deadline: nextTurnInfo.deadline,
+            });
+          }
+        }
+
+        logger.info({
+          agentId,
+          battleId: battleId!,
+          turnId: turn.id,
+          turnNumber: turn.turnNumber,
+        }, 'Turn submitted and processed successfully');
+      } catch (turnError: any) {
+        // Handle specific turn submission errors
+        if (turnError.message === 'NOT_YOUR_TURN') {
+          socket.emit('error', {
+            code: 'NOT_YOUR_TURN',
+            message: 'It is not your turn to submit',
+          });
+        } else if (turnError.message === 'TURN_DEADLINE_EXCEEDED') {
+          socket.emit('error', {
+            code: 'TURN_DEADLINE_EXCEEDED',
+            message: 'Turn deadline exceeded',
+          });
+        } else if (turnError.message === 'INVALID_BATTLE_STATE') {
+          socket.emit('error', {
+            code: 'INVALID_BATTLE_STATE',
+            message: 'Battle is not in progress',
+          });
+        } else {
+          throw turnError; // Re-throw for outer catch
+        }
+      }
     } catch (error) {
       logger.error({ err: error }, 'Redis error during turn submission');
       socket.emit('error', {
@@ -299,18 +450,38 @@ export function registerBattleHandlers(
       // Set vote flag (expires when battle ends - using 24 hours as max)
       await redis.set(rateLimitKey, '1', 'EX', 86400);
 
-      // TODO: Phase 1F - Implement voting logic
-      // For now, just acknowledge
-      socket.emit('battle:vote_recorded', {
-        battleId: battleId!,
-        success: true
-      });
+      // Phase 1E: Complete voting logic
+      try {
+        await recordVote(battleId!, identifier, agentId!, logger);
 
-      logger.info({
-        battleId: battleId!,
-        votedFor: agentId!,
-        voter: identifier
-      }, 'Vote cast in battle');
+        // Acknowledge vote to voter
+        socket.emit('battle:vote_recorded', {
+          battleId: battleId!,
+          success: true,
+        });
+
+        // Get total votes and broadcast update (hide breakdown for fairness)
+        const totalVotes = await getTotalVotes(battleId!);
+        _io.to(BattleRooms.main(battleId!)).emit('battle:vote_update', {
+          battleId: battleId!,
+          totalVotes,
+        });
+
+        logger.info({
+          battleId: battleId!,
+          votedFor: agentId!,
+          voter: identifier,
+        }, 'Vote recorded successfully');
+      } catch (voteError: any) {
+        if (voteError.message === 'ALREADY_VOTED') {
+          socket.emit('error', {
+            code: 'ALREADY_VOTED',
+            message: 'You have already voted in this battle',
+          });
+        } else {
+          throw voteError; // Re-throw for outer catch
+        }
+      }
     } catch (error) {
       logger.error({ err: error }, 'Redis error during voting');
       socket.emit('error', {

@@ -41,8 +41,9 @@ export async function initializeSocketServer(
 
   // Redis adapter for horizontal scaling
   // Allows multiple server instances to share Socket.io state
-  const pubClient = redis.duplicate();
-  const subClient = redis.duplicate();
+  // Create duplicates with lazyConnect to prevent auto-connection conflicts
+  const pubClient = redis.duplicate({ lazyConnect: true });
+  const subClient = redis.duplicate({ lazyConnect: true });
 
   // Initialize Redis adapter with fail-fast behavior
   try {

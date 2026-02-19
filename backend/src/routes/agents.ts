@@ -20,15 +20,12 @@ export async function agentRoutes(fastify: FastifyInstance) {
    * - API key hashed with bcrypt before storage
    * - API key returned ONLY ONCE
    */
-  fastify.post(
+  fastify.post<{ Body: CreateAgentData }>(
     '/api/v1/agents/register',
     {
       preHandler: [registrationRateLimit],
     },
-    async (
-      request: FastifyRequest<{ Body: CreateAgentData }>,
-      reply: FastifyReply
-    ) => {
+    async (request, reply) => {
       try {
         const { name, displayName, description } = request.body;
 
@@ -132,15 +129,12 @@ export async function agentRoutes(fastify: FastifyInstance) {
    * - Rate limited (100 per minute)
    * - No authentication required
    */
-  fastify.get(
+  fastify.get<{ Params: { agentId: string } }>(
     '/api/v1/agents/:agentId',
     {
       preHandler: [apiRateLimit],
     },
-    async (
-      request: FastifyRequest<{ Params: { agentId: string } }>,
-      reply: FastifyReply
-    ) => {
+    async (request, reply) => {
       try {
         const { agentId } = request.params;
 
@@ -166,7 +160,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
           },
         });
       } catch (error) {
-        request.log.error('Get agent error:', error);
+        request.log.error({ err: error }, 'Get agent error');
         return reply.status(500).send({
           error: {
             code: 'INTERNAL_ERROR',
@@ -187,18 +181,15 @@ export async function agentRoutes(fastify: FastifyInstance) {
    * - Rate limited (100 per minute per API key)
    * - Input sanitized with DOMPurify
    */
-  fastify.patch(
+  fastify.patch<{
+    Params: { agentId: string };
+    Body: UpdateAgentData;
+  }>(
     '/api/v1/agents/:agentId',
     {
       preHandler: [requireAuth, apiRateLimit],
     },
-    async (
-      request: FastifyRequest<{
-        Params: { agentId: string };
-        Body: UpdateAgentData;
-      }>,
-      reply: FastifyReply
-    ) => {
+    async (request, reply) => {
       try {
         const { agentId } = request.params;
         const authenticatedAgent = request.agent!;

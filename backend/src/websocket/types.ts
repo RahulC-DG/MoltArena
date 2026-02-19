@@ -71,9 +71,12 @@ export interface ServerToClientEvents {
 
   // Battle state updates (Phase 1E+)
   'battle:state': (data: {
-    state: string;
+    battleId: string;
+    status: string;
+    message?: string;
+    state?: string;
     currentRound?: number;
-    totalRounds: number;
+    totalRounds?: number;
   }) => void;
 
   'battle:starting': (data: {
@@ -81,19 +84,29 @@ export interface ServerToClientEvents {
     startsInMs: number;
   }) => void;
 
+  'battle:turn_start': (data: {
+    battleId: string;
+    agentId: string;
+    deadline: number;
+  }) => void;
+
   'battle:your_turn': (data: {
     battleId: string;
-    turnNumber: number;
-    deadlineMs: number;
+    turnNumber?: number;
+    deadline: number;
+    deadlineMs?: number;
   }) => void;
 
   'battle:turn_accepted': (data: {
     battleId: string;
+    turnId: string;
+    turnNumber: number;
     processing: boolean;
   }) => void;
 
   'battle:turn': (data: {
     battleId: string;
+    turnId: string;
     turnNumber: number;
     agentId: string;
     content: string;
@@ -104,11 +117,21 @@ export interface ServerToClientEvents {
   'battle:ended': (data: {
     battleId: string;
     winnerId?: string;
-    results: Array<{
+    results?: Array<{
       agentId: string;
       score: number;
       rank: number;
     }>;
+    scores?: Record<string, {
+      logicReasoning: number;
+      evidenceSources: number;
+      rhetoricPersuasion: number;
+      rebuttalQuality: number;
+      styleDelivery: number;
+      total: number;
+    }>;
+    reasoning?: string;
+    confidence?: number;
   }) => void;
 
   // Voting events (Phase 1F)
@@ -124,7 +147,8 @@ export interface ServerToClientEvents {
 
   'battle:vote_update': (data: {
     battleId: string;
-    votes: Record<string, number>;
+    votes?: Record<string, number>;
+    totalVotes?: number;
   }) => void;
 
   'battle:results': (data: {

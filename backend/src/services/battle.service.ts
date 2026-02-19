@@ -164,7 +164,7 @@ export async function createBattle(
 /**
  * Get battle by ID with participants
  */
-export async function getBattleById(battleId: string): Promise<Battle | null> {
+export async function getBattleById(battleId: string) {
   return prisma.battle.findUnique({
     where: { id: battleId },
     include: {
@@ -186,6 +186,9 @@ export async function getBattleById(battleId: string): Promise<Battle | null> {
           name: true,
           displayName: true,
         },
+      },
+      turns: {
+        orderBy: { turnNumber: 'asc' },
       },
     },
   });
@@ -523,6 +526,226 @@ export async function cancelBattle(
       },
     },
   });
+
+  return updatedBattle;
+}
+
+/**
+ * Validate state transition is allowed
+ *
+ * Valid transitions:
+ * - LOBBY → STARTING
+ * - STARTING → IN_PROGRESS
+ * - IN_PROGRESS → VOTING
+ * - VOTING → JUDGING
+ * - JUDGING → COMPLETED
+ * - any → CANCELLED
+ *
+ * @param from - Current state
+ * @param to - Target state
+ * @returns True if transition is valid
+ */
+export function validateStateTransition(from: BattleStatus, to: BattleStatus): boolean {
+  // Can always cancel
+  if (to === BattleStatus.CANCELLED) {
+    return true;
+  }
+
+  const validTransitions: Record<BattleStatus, BattleStatus[]> = {
+    [BattleStatus.LOBBY]: [BattleStatus.STARTING, BattleStatus.CANCELLED],
+    [BattleStatus.STARTING]: [BattleStatus.IN_PROGRESS, BattleStatus.CANCELLED],
+    [BattleStatus.IN_PROGRESS]: [BattleStatus.VOTING, BattleStatus.CANCELLED],
+    [BattleStatus.VOTING]: [BattleStatus.JUDGING, BattleStatus.CANCELLED],
+    [BattleStatus.JUDGING]: [BattleStatus.COMPLETED, BattleStatus.CANCELLED],
+    [BattleStatus.COMPLETED]: [],
+    [BattleStatus.CANCELLED]: [],
+  };
+
+  return validTransitions[from]?.includes(to) || false;
+}
+
+/**
+ * Transition battle from STARTING to IN_PROGRESS
+ *
+ * Called after countdown completes (10 seconds)
+ * Sets startedAt timestamp
+ *
+ * @param battleId - Battle ID
+ * @param logger - Fastify logger
+ */
+export async function transitionToInProgress(
+  battleId: string,
+  logger: any
+): Promise<Battle> {
+  const battle = await prisma.battle.findUnique({
+    where: { id: battleId },
+  });
+
+  if (!battle) {
+    throw new Error('Battle not found');
+  }
+
+  if (battle.status !== BattleStatus.STARTING) {
+    throw new Error('Battle must be in STARTING state');
+  }
+
+  const updatedBattle = await prisma.battle.update({
+    where: { id: battleId },
+    data: {
+      status: BattleStatus.IN_PROGRESS,
+      startedAt: new Date(),
+    },
+  });
+
+  logger.info({ battleId, status: 'IN_PROGRESS' }, 'Battle transitioned to IN_PROGRESS');
+
+  return updatedBattle;
+}
+
+/**
+ * Transition battle from IN_PROGRESS to VOTING
+ *
+ * Called when all rounds are complete
+ *
+ * @param battleId - Battle ID
+ * @param logger - Fastify logger
+ */
+export async function transitionToVoting(
+  battleId: string,
+  logger: any
+): Promise<Battle> {
+  const battle = await prisma.battle.findUnique({
+    where: { id: battleId },
+  });
+
+  if (!battle) {
+    throw new Error('Battle not found');
+  }
+
+  if (battle.status !== BattleStatus.IN_PROGRESS) {
+    throw new Error('Battle must be in IN_PROGRESS state');
+  }
+
+  const updatedBattle = await prisma.battle.update({
+    where: { id: battleId },
+    data: { status: BattleStatus.VOTING },
+  });
+
+  logger.info({ battleId, status: 'VOTING' }, 'Battle transitioned to VOTING');
+
+  return updatedBattle;
+}
+
+/**
+ * Transition battle from VOTING to JUDGING
+ *
+ * Called after voting period ends (30 seconds)
+ *
+ * @param battleId - Battle ID
+ * @param logger - Fastify logger
+ */
+export async function transitionToJudging(
+  battleId: string,
+  logger: any
+): Promise<Battle> {
+  const battle = await prisma.battle.findUnique({
+    where: { id: battleId },
+  });
+
+  if (!battle) {
+    throw new Error('Battle not found');
+  }
+
+  if (battle.status !== BattleStatus.VOTING) {
+    throw new Error('Battle must be in VOTING state');
+  }
+
+  const updatedBattle = await prisma.battle.update({
+    where: { id: battleId },
+    data: { status: BattleStatus.JUDGING },
+  });
+
+  logger.info({ battleId, status: 'JUDGING' }, 'Battle transitioned to JUDGING');
+
+  return updatedBattle;
+}
+
+/**
+ * Transition battle from JUDGING to COMPLETED
+ *
+ * Called after judge makes decision
+ * Sets winnerId, judgeReasoning, and endedAt
+ *
+ * @param battleId - Battle ID
+ * @param winnerId - Winning agent ID
+ * @param reasoning - Judge's reasoning
+ * @param logger - Fastify logger
+ */
+export async function transitionToCompleted(
+  battleId: string,
+  winnerId: string,
+  reasoning: string,
+  logger: any
+): Promise<Battle> {
+  const battle = await prisma.battle.findUnique({
+    where: { id: battleId },
+  });
+
+  if (!battle) {
+    throw new Error('Battle not found');
+  }
+
+  if (battle.status !== BattleStatus.JUDGING) {
+    throw new Error('Battle must be in JUDGING state');
+  }
+
+  const updatedBattle = await prisma.battle.update({
+    where: { id: battleId },
+    data: {
+      status: BattleStatus.COMPLETED,
+      winnerId,
+      judgeReasoning: reasoning,
+      endedAt: new Date(),
+    },
+  });
+
+  logger.info({ battleId, winnerId, status: 'COMPLETED' }, 'Battle transitioned to COMPLETED');
+
+  return updatedBattle;
+}
+
+/**
+ * Transition battle to CANCELLED state
+ *
+ * Can be called from any state for error recovery
+ *
+ * @param battleId - Battle ID
+ * @param reason - Cancellation reason
+ * @param logger - Fastify logger
+ */
+export async function transitionToCancelled(
+  battleId: string,
+  reason: string,
+  logger: any
+): Promise<Battle> {
+  const battle = await prisma.battle.findUnique({
+    where: { id: battleId },
+  });
+
+  if (!battle) {
+    throw new Error('Battle not found');
+  }
+
+  const updatedBattle = await prisma.battle.update({
+    where: { id: battleId },
+    data: {
+      status: BattleStatus.CANCELLED,
+      judgeReasoning: reason, // Store cancellation reason
+      endedAt: new Date(),
+    },
+  });
+
+  logger.warn({ battleId, reason, status: 'CANCELLED' }, 'Battle cancelled');
 
   return updatedBattle;
 }

@@ -71,7 +71,7 @@ export async function requireAuth(
     // Attach agent to request for use in route handlers
     request.agent = agent;
   } catch (error) {
-    request.log.error('Authentication error:', error);
+    request.log.error({ err: error }, 'Authentication error');
     return reply.status(500).send({
       error: {
         code: 'INTERNAL_ERROR',
@@ -87,8 +87,7 @@ export async function requireAuth(
  * Useful for endpoints that work for both authenticated and anonymous users
  */
 export async function optionalAuth(
-  request: FastifyRequest,
-  reply: FastifyReply
+  request: FastifyRequest
 ): Promise<void> {
   try {
     const apiKey = extractApiKey(request.headers.authorization);
@@ -101,6 +100,6 @@ export async function optionalAuth(
     }
   } catch (error) {
     // Silent fail for optional auth - just don't attach agent
-    request.log.warn('Optional auth failed:', error);
+    request.log.warn({ err: error }, 'Optional auth failed');
   }
 }
