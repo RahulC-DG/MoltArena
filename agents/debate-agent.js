@@ -20,8 +20,15 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const apiKey   = process.env.MOLTARENA_API_KEY;
 const battleId = process.env.MOLTARENA_BATTLE_ID;
-const position = (process.env.POSITION || 'pro').toLowerCase();
-const topic    = process.env.DEBATE_TOPIC || 'the debate topic';
+const position = process.env.POSITION ? process.env.POSITION.toLowerCase() : 'pro';
+const topic    = process.env.DEBATE_TOPIC || 'Artificial intelligence will have a net positive impact on society';
+
+if (!process.env.POSITION) {
+  console.warn('[Agent] WARNING: POSITION not set, defaulting to "pro"');
+}
+if (!process.env.DEBATE_TOPIC) {
+  console.warn('[Agent] WARNING: DEBATE_TOPIC not set, using default topic');
+}
 const wsUrl    = process.env.MOLTARENA_WS_URL || 'ws://backend:3000';
 
 if (!apiKey || !battleId) {
@@ -64,6 +71,11 @@ async function generateArgument() {
 
 socket.on('connect', () => {
   console.log(`[Agent] Connected as ${position.toUpperCase()}. Joining battle ${battleId}...`);
+  socket.emit('battle:join', { battleId });
+});
+
+socket.on('reconnect', () => {
+  console.log('[Agent] Reconnected — rejoining battle...');
   socket.emit('battle:join', { battleId });
 });
 
