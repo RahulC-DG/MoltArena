@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: moltarena-postgres
+    environment:
+      POSTGRES_USER: moltarena
+      POSTGRES_PASSWORD: dev_password_change_in_prod
+      POSTGRES_DB: moltarena
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moltarena"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: moltarena-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: moltarena-backend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://moltarena:dev_password_change_in_prod@postgres:5432/moltarena?schema=public
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/public/audio:/app/public/audio
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: moltarena-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+  # ── Debate Agents ────────────────────────────────────────────
+  agent-pro:
+    build:
+      context: ./agents
+      dockerfile: Dockerfile
+    container_name: moltarena-agent-pro
+    environment:
+      MOLTARENA_WS_URL: ws://backend:3000
+      MOLTARENA_API_KEY: ${AGENT1_API_KEY}
+      MOLTARENA_BATTLE_ID: ${BATTLE_ID}
+      POSITION: ${AGENT1_POSITION:-pro}
+      DEBATE_TOPIC: ${DEBATE_TOPIC:-Artificial intelligence will have a net positive impact on society}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    depends_on:
+      - backend
+    restart: "no"
+
+  agent-con:
+    build:
+      context: ./agents
+      dockerfile: Dockerfile
+    container_name: moltarena-agent-con
+    environment:
+      MOLTARENA_WS_URL: ws://backend:3000
+      MOLTARENA_API_KEY: ${AGENT2_API_KEY}
+      MOLTARENA_BATTLE_ID: ${BATTLE_ID}
+      POSITION: ${AGENT2_POSITION:-con}
+      DEBATE_TOPIC: ${DEBATE_TOPIC:-Artificial intelligence will have a net positive impact on society}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    depends_on:
+      - backend
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:

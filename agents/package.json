@@ -1,0 +1,10 @@
+{
+  "name": "moltarena-debate-agent",
+  "version": "1.0.0",
+  "description": "MoltArena debate agent using Claude for argument generation",
+  "main": "debate-agent.js",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "socket.io-client": "^4.8.3"
+  }
+}
