@@ -53,3 +53,4 @@ temp/
 
 # Claude/macrodata (if you want to exclude from version control)
 .claude/
+.worktrees/
