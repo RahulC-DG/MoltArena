@@ -1,32 +1,47 @@
 import { io, Socket } from 'socket.io-client';
 import type {
+  BattleConnectedEvent,
   BattleStateEvent,
+  BattleStartingEvent,
   BattleTurnEvent,
-  Commentary,
+  BattleCommentaryEvent,
   VotingOpenEvent,
-  VoteUpdate,
-  BattleResultsEvent,
+  VoteRecordedEvent,
+  VoteUpdateEvent,
+  BattleEndedEvent,
+  ParticipantJoinedEvent,
+  ParticipantLeftEvent,
 } from '@/types';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
 
 export type SocketEventHandlers = {
-  'battle:connected': (data: { battle_id: string; state: string }) => void;
-  'battle:state': (data: BattleStateEvent) => void;
-  'battle:turn': (data: BattleTurnEvent) => void;
-  'battle:commentary': (data: Commentary) => void;
-  'battle:voting_open': (data: VotingOpenEvent) => void;
-  'battle:vote_update': (data: VoteUpdate) => void;
-  'battle:results': (data: BattleResultsEvent) => void;
-  'battle:starting': (data: { countdown: number; agents: any[] }) => void;
-  'battle:ended': (data: BattleResultsEvent) => void;
+  // Connection events
+  connected: (data: { socketId: string; role: 'agent' | 'spectator'; agentId?: string }) => void;
   connect: () => void;
   disconnect: () => void;
-  error: (error: Error) => void;
+  error: (data: { code: string; message: string; details?: any }) => void;
+
+  // Battle room events
+  'battle:connected': (data: BattleConnectedEvent) => void;
+  'battle:participant_joined': (data: ParticipantJoinedEvent) => void;
+  'battle:participant_left': (data: ParticipantLeftEvent) => void;
+
+  // Battle state events (Phase 1E)
+  'battle:state': (data: BattleStateEvent) => void;
+  'battle:starting': (data: BattleStartingEvent) => void;
+  'battle:turn': (data: BattleTurnEvent) => void;
+  'battle:commentary': (data: BattleCommentaryEvent) => void;
+  'battle:ended': (data: BattleEndedEvent) => void;
+
+  // Voting events (Phase 1F)
+  'battle:voting_open': (data: VotingOpenEvent) => void;
+  'battle:vote_recorded': (data: VoteRecordedEvent) => void;
+  'battle:vote_update': (data: VoteUpdateEvent) => void;
 };
 
 /**
- * WebSocket manager for battle connections
+ * WebSocket manager for battle connections (Phase 1E Backend Compatible)
  */
 export class BattleSocket {
   private socket: Socket | null = null;
@@ -43,12 +58,17 @@ export class BattleSocket {
     this.battleId = battleId;
     this.socket = io(WS_URL, {
       auth: { token },
-      query: { battle_id: battleId },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       reconnectionAttempts: 5,
+    });
+
+    // Auto-join battle room on connection
+    this.socket.on('connect', () => {
+      console.log('[Socket] Connected, joining battle:', battleId);
+      this.emit('battle:join', { battleId });
     });
 
     return this.socket;
@@ -58,7 +78,8 @@ export class BattleSocket {
    * Disconnect from battle room
    */
   disconnect(): void {
-    if (this.socket) {
+    if (this.socket && this.battleId) {
+      this.emit('battle:leave', { battleId: this.battleId });
       this.socket.disconnect();
       this.socket = null;
       this.battleId = null;
@@ -73,7 +94,7 @@ export class BattleSocket {
     handler: SocketEventHandlers[K]
   ): void {
     if (!this.socket) {
-      console.warn('Socket not connected');
+      console.warn('[Socket] Cannot register handler: not connected');
       return;
     }
     this.socket.on(event, handler as any);
@@ -95,17 +116,22 @@ export class BattleSocket {
    */
   emit(event: string, data?: any): void {
     if (!this.socket) {
-      console.warn('Socket not connected');
+      console.warn('[Socket] Cannot emit: not connected');
       return;
     }
     this.socket.emit(event, data);
   }
 
   /**
-   * Cast a vote for an agent
+   * Cast a vote for an agent (Phase 1F)
    */
   vote(agentId: string): void {
-    this.emit('battle:vote', { agent_id: agentId });
+    if (!this.battleId) {
+      console.error('[Socket] Cannot vote: no active battle');
+      return;
+    }
+    // Use camelCase to match backend Phase 1E
+    this.emit('battle:vote', { battleId: this.battleId, agentId });
   }
 
   /**

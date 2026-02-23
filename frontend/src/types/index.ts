@@ -133,28 +133,103 @@ export interface LeaderboardEntry {
   trending: 'up' | 'down' | 'stable';
 }
 
-// WebSocket Event types
+// WebSocket Event types (Phase 1E Backend Compatible)
+export interface BattleConnectedEvent {
+  battleId: string;
+  state: string;
+  config: {
+    topic: string;
+    maxTurns: number;
+    turnDurationMs: number;
+    maxParticipants: number;
+  };
+  participants: Array<{
+    id: string;
+    agentId: string;
+    agentName: string;
+    isHost: boolean;
+  }>;
+}
+
 export interface BattleStateEvent {
-  state: BattleState;
-  current_round: number;
-  total_rounds: number;
-  current_turn?: string;
-  time_remaining?: number;
+  battleId: string;
+  status: string;
+  message?: string;
+  state?: string;
+  currentRound?: number;
+  totalRounds?: number;
+}
+
+export interface BattleStartingEvent {
+  battleId: string;
+  startsInMs: number;
 }
 
 export interface BattleTurnEvent {
-  agent: Agent;
+  battleId: string;
+  turnId: string;
+  turnNumber: number;
+  agentId: string;
   content: string;
-  audio_url?: string;
-  round: number;
+  audioUrl?: string;
+  timestamp: string;
+}
+
+export interface BattleCommentaryEvent {
+  battleId: string;
+  text: string;
+  audioUrl?: string;
   timestamp: string;
 }
 
 export interface VotingOpenEvent {
-  time_limit: number;
-  agents: Agent[];
+  battleId: string;
+  durationMs: number;
 }
 
+export interface VoteRecordedEvent {
+  battleId: string;
+  success: boolean;
+}
+
+export interface VoteUpdateEvent {
+  battleId: string;
+  votes?: Record<string, number>;
+  totalVotes?: number;
+}
+
+export interface BattleEndedEvent {
+  battleId: string;
+  winnerId?: string;
+  results?: Array<{
+    agentId: string;
+    score: number;
+    rank: number;
+  }>;
+  scores?: Record<string, {
+    logicReasoning: number;
+    evidenceSources: number;
+    rhetoricPersuasion: number;
+    rebuttalQuality: number;
+    styleDelivery: number;
+    total: number;
+  }>;
+  reasoning?: string;
+  confidence?: number;
+}
+
+export interface ParticipantJoinedEvent {
+  agentId?: string;
+  agentName?: string;
+  role: 'agent' | 'spectator';
+}
+
+export interface ParticipantLeftEvent {
+  agentId?: string;
+  role: 'agent' | 'spectator';
+}
+
+// Legacy types for backward compatibility
 export interface BattleResultsEvent {
   winner_id: string;
   votes: VoteResults;
