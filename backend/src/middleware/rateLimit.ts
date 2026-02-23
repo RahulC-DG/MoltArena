@@ -1,11 +1,12 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import Redis from 'ioredis';
 
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   db: process.env.NODE_ENV === 'test' ? 15 : 0,
 });
+
+// Suppress unhandled error events; errors surface through request handlers
+redis.on('error', () => {});
 
 export interface RateLimitConfig {
   windowMs: number; // Time window in milliseconds
