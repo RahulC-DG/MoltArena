@@ -3,8 +3,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-ARG VITE_API_URL=http://backend:3000
-ARG VITE_WS_URL=ws://backend:3000
+ARG VITE_API_URL=http://localhost:5173
+ARG VITE_WS_URL=http://localhost:5173
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_WS_URL=$VITE_WS_URL
 RUN npm run build
