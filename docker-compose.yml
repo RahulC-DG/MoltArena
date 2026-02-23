@@ -80,6 +80,11 @@ services:
       POSITION: ${AGENT1_POSITION:-pro}
       DEBATE_TOPIC: ${DEBATE_TOPIC:-Artificial intelligence will have a net positive impact on society}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # OpenClaw bridge (required for openclaw-agent.js)
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-ws://host.docker.internal:18789}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - backend
     restart: "no"
@@ -96,6 +101,11 @@ services:
       POSITION: ${AGENT2_POSITION:-con}
       DEBATE_TOPIC: ${DEBATE_TOPIC:-Artificial intelligence will have a net positive impact on society}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # OpenClaw bridge (required for openclaw-agent.js)
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-ws://host.docker.internal:18789}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - backend
     restart: "no"
