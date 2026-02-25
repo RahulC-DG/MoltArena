@@ -7,16 +7,17 @@
  * Uses the CLI subprocess — avoids gateway WebSocket scope issues entirely.
  *
  * Run:
- *   MOLTARENA_API_KEY=... MOLTARENA_BATTLE_ID=... POSITION=pro node openclaw-agent.js
+ *   MOLTARENA_API_KEY=... MOLTARENA_BATTLE_ID=... node openclaw-agent.js
  *
  * Required env vars:
  *   MOLTARENA_API_KEY   - Agent API key from POST /api/v1/agents/register
  *   MOLTARENA_BATTLE_ID - UUID of the battle to join
- *   POSITION            - "pro" or "con"
  *
  * Optional env vars:
- *   DEBATE_TOPIC        - The topic being debated
  *   MOLTARENA_WS_URL    - MoltArena WebSocket URL (default: ws://localhost:3000)
+ *
+ * Note: POSITION and DEBATE_TOPIC are no longer needed — the server assigns
+ * position and topic via the battle:position_assigned event.
  */
 
 const { io }    = require('socket.io-client');
@@ -26,8 +27,6 @@ const { spawn } = require('child_process');
 
 const apiKey   = process.env.MOLTARENA_API_KEY;
 const battleId = process.env.MOLTARENA_BATTLE_ID;
-const position = (process.env.POSITION || 'pro').toLowerCase();
-const topic    = process.env.DEBATE_TOPIC || 'Artificial intelligence will have a net positive impact on society';
 const wsUrl    = process.env.MOLTARENA_WS_URL || 'ws://localhost:3000';
 
 if (!apiKey || !battleId) {
@@ -148,14 +147,13 @@ async function joinBattleViaRest() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`[Agent] Starting — position: ${position.toUpperCase()}, topic: "${topic}"`);
+  console.log(`[Agent] Starting — waiting for server to assign position...`);
 
   // 1. Register as battle participant
   await joinBattleViaRest();
 
-  // 2. Initialize OpenClaw CLI (persona context embedded in every call)
-  const openclaw = new OpenClawCLI(position, topic);
-  console.log(`[Agent] OpenClaw ready — role context embedded in every turn`);
+  // 2. OpenClaw is initialized inside battle:position_assigned once we know our role
+  let openclaw = null;
 
   // 3. Connect to MoltArena and run the debate
   const turnHistory = [];
@@ -169,7 +167,7 @@ async function main() {
   });
 
   socket.on('connect', () => {
-    console.log(`[Agent] Connected to MoltArena as ${position.toUpperCase()}`);
+    console.log(`[Agent] Connected to MoltArena`);
     socket.emit('battle:join', { battleId });
   });
 
@@ -183,7 +181,6 @@ async function main() {
   });
 
   async function tryStartBattle() {
-    if (position !== 'pro') return; // only host starts
     try {
       const res = await fetch(`${httpBase}/api/v1/battles/${battleId}/start`, {
         method:  'POST',
@@ -217,7 +214,17 @@ async function main() {
     console.log(`[Agent] Battle starts in ${Math.ceil(data.startsInMs / 1000)}s`);
   });
 
+  socket.on('battle:position_assigned', (data) => {
+    console.log(`[Agent] Assigned position: ${data.position.toUpperCase()} for topic: "${data.topic}"`);
+    openclaw = new OpenClawCLI(data.position, data.topic);
+    console.log(`[Agent] OpenClaw ready — role context embedded in every turn`);
+  });
+
   socket.on('battle:your_turn', async () => {
+    if (openclaw === null) {
+      console.warn('[Agent] Warning: position not yet assigned, skipping turn');
+      return;
+    }
     console.log('[Agent] My turn — asking OpenClaw to generate argument...');
     try {
       const prompt = turnHistory.length > 0
@@ -228,7 +235,7 @@ async function main() {
 
       console.log(`[Agent] Submitting argument (${argument.length} chars)`);
       socket.emit('battle:submit_turn', { battleId, content: argument });
-      turnHistory.push({ role: position, content: argument });
+      turnHistory.push({ role: openclaw.agentName, content: argument });
     } catch (err) {
       console.error('[Agent] Failed to generate argument:', err.message);
     }
@@ -237,8 +244,7 @@ async function main() {
   socket.on('battle:turn_accepted', () => { console.log('[Agent] Turn accepted'); });
 
   socket.on('battle:turn', (data) => {
-    const opponentRole = position === 'pro' ? 'con' : 'pro';
-    turnHistory.push({ role: opponentRole, content: data.content });
+    turnHistory.push({ role: data.role || 'opponent', content: data.content });
     console.log(`[Agent] Opponent turn recorded (${data.content?.length || 0} chars)`);
   });
 
