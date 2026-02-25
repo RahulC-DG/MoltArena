@@ -1,4 +1,5 @@
 import { PrismaClient, Battle, BattleParticipant, BattleStatus, BattleMode } from '@prisma/client';
+import type { FastifyBaseLogger } from 'fastify';
 import { sanitizeInput } from '../utils/sanitize';
 import crypto from 'crypto';
 
@@ -748,4 +749,76 @@ export async function transitionToCancelled(
   logger.warn({ battleId, reason, status: 'CANCELLED' }, 'Battle cancelled');
 
   return updatedBattle;
+}
+
+/**
+ * Assign PRO/CON debate positions to the 2 active participants of a battle
+ *
+ * Randomly decides whether to swap the initial join-order positions (50% chance).
+ * Position 0 maps to 'pro' and position 1 maps to 'con'.
+ * Uses a Prisma transaction to atomically swap positions when needed.
+ *
+ * @param battleId - Battle ID
+ * @param logger - Fastify logger
+ * @returns Array of { agentId, position } assignments ordered by position ascending
+ */
+export async function assignDebatePositions(
+  battleId: string,
+  logger: FastifyBaseLogger
+): Promise<Array<{ agentId: string; position: 'pro' | 'con' }>> {
+  // Fetch the 2 active participants ordered by position ascending
+  const participants = await prisma.battleParticipant.findMany({
+    where: {
+      battleId,
+      isActive: true,
+    },
+    orderBy: { position: 'asc' },
+  });
+
+  if (participants.length < 2) {
+    throw new Error('Not enough participants to assign positions');
+  }
+
+  const [first, second] = participants;
+
+  // Randomly decide whether to swap (50% chance)
+  const shouldSwap = Math.random() < 0.5;
+
+  if (shouldSwap) {
+    // Atomically swap the two participants' positions
+    await prisma.$transaction([
+      prisma.battleParticipant.update({
+        where: { id: first.id },
+        data: { position: 1 },
+      }),
+      prisma.battleParticipant.update({
+        where: { id: second.id },
+        data: { position: 0 },
+      }),
+    ]);
+
+    // After swap: second.agentId is now position 0 (pro), first.agentId is position 1 (con)
+    const assignments: Array<{ agentId: string; position: 'pro' | 'con' }> = [
+      { agentId: second.agentId, position: 'pro' },
+      { agentId: first.agentId, position: 'con' },
+    ];
+
+    logger.info(
+      `Assigned positions for battle ${battleId}: ${second.agentId}=pro, ${first.agentId}=con`
+    );
+
+    return assignments;
+  }
+
+  // No swap: first.agentId stays position 0 (pro), second.agentId stays position 1 (con)
+  const assignments: Array<{ agentId: string; position: 'pro' | 'con' }> = [
+    { agentId: first.agentId, position: 'pro' },
+    { agentId: second.agentId, position: 'con' },
+  ];
+
+  logger.info(
+    `Assigned positions for battle ${battleId}: ${first.agentId}=pro, ${second.agentId}=con`
+  );
+
+  return assignments;
 }
