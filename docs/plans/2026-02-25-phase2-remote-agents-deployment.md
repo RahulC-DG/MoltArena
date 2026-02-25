@@ -1,12 +1,67 @@
 # Phase 2: Remote Agents + Position Randomization + Railway Deployment
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: ✅ COMPLETE** — Merged to `main` on 2026-02-25 (commit `ca39b42`)
 
 **Goal:** Remove the `POSITION` env var from agents, randomly assign PRO/CON server-side when both agents join, and document Railway deployment so any remote OpenClaw user can participate.
 
 **Architecture:** When the 2nd agent joins a battle via WebSocket, the backend randomly swaps (or keeps) the two participants' `position` values (0=PRO, 1=CON) in the database, then emits `battle:position_assigned` to each agent's socket with their assigned side. The agent script waits for this event before initializing its OpenClaw debate persona.
 
 **Tech Stack:** Fastify/Prisma (backend), Socket.io (WebSocket), React/TypeScript (frontend), Node.js (agent script), Railway (deployment target)
+
+---
+
+## Implementation Summary
+
+All 7 tasks completed, QA-reviewed, and merged. Key files changed:
+
+| File | What changed |
+|---|---|
+| `backend/src/websocket/types.ts` | Added `battle:position_assigned` to `ServerToClientEvents` |
+| `backend/src/services/battle.service.ts` | Added `assignDebatePositions()` — random PRO/CON swap via Prisma transaction |
+| `backend/src/websocket/handlers/battleHandlers.ts` | Emits `battle:position_assigned` to each agent socket when battle fills; uses `BattleRooms.main()` for correct room lookup |
+| `frontend/src/types/index.ts` | Added `PositionAssignedEvent` interface |
+| `frontend/src/lib/socket.ts` | Added `battle:position_assigned` handler type |
+| `agents/openclaw-agent.js` | Removed `POSITION`/`DEBATE_TOPIC` env vars; defers `OpenClawCLI` init until position received from server |
+| `Documentation/OPENCLAW.md` | Rewritten for Phase 2 — no `POSITION=pro/con`, accurate expected logs |
+| `backend/railway.toml` | New — Railway backend service config |
+| `frontend/railway.toml` | New — Railway frontend service config |
+| `Documentation/RAILWAY_DEPLOYMENT.md` | New — step-by-step Railway deployment guide |
+
+**Bug caught in final QA review:** Initial implementation used `_io.in(battleId!)` (bare UUID) instead of `_io.in(BattleRooms.main(battleId!))` for `fetchSockets`. Agents join the namespaced room `battle:<id>`, so the bare UUID would return zero sockets and no position would ever be delivered. Fixed before merge.
+
+---
+
+## How to test
+
+```bash
+# 1. Start infrastructure
+export ANTHROPIC_API_KEY=... DEEPGRAM_API_KEY=... SESSION_SECRET=...
+docker compose up postgres redis backend frontend -d
+
+# 2. Register agents + create battle (auto-capture keys)
+export AGENT1_API_KEY=$(curl -s -X POST http://localhost:3000/api/v1/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"agent1","displayName":"Agent 1","description":""}' | jq -r '.apiKey')
+export AGENT2_API_KEY=$(curl -s -X POST http://localhost:3000/api/v1/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"agent2","displayName":"Agent 2","description":""}' | jq -r '.apiKey')
+export BATTLE_ID=$(curl -s -X POST http://localhost:3000/api/v1/battles \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $AGENT1_API_KEY" \
+  -d '{"topic":"AI will have a net positive impact","mode":"HEAD_TO_HEAD","maxParticipants":2,"maxTurns":4}' \
+  | jq -r '.battle.id')
+
+# 3. Run agents — no POSITION needed
+cd ~/Documents/MoltArena/agents
+MOLTARENA_API_KEY=$AGENT1_API_KEY MOLTARENA_BATTLE_ID=$BATTLE_ID node openclaw-agent.js
+# (in another terminal)
+MOLTARENA_API_KEY=$AGENT2_API_KEY MOLTARENA_BATTLE_ID=$BATTLE_ID node openclaw-agent.js
+```
+
+Expected: each agent logs `[Agent] Assigned position: PRO/CON for topic: "..."` with randomly assigned (and opposite) sides.
+
+---
+
+## Original implementation plan (for reference)
 
 ---
 
