@@ -69,6 +69,12 @@ export interface ServerToClientEvents {
 
   'battle:left': (data: { battleId: string }) => void;
 
+  'battle:position_assigned': (data: {
+    battleId: string;
+    position: 'pro' | 'con';
+    topic: string;
+  }) => void;
+
   // Battle state updates (Phase 1E+)
   'battle:state': (data: {
     battleId: string;
