@@ -11,6 +11,7 @@ import type {
   BattleEndedEvent,
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
+  PositionAssignedEvent,
 } from '@/types';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
@@ -26,6 +27,7 @@ export type SocketEventHandlers = {
   'battle:connected': (data: BattleConnectedEvent) => void;
   'battle:participant_joined': (data: ParticipantJoinedEvent) => void;
   'battle:participant_left': (data: ParticipantLeftEvent) => void;
+  'battle:position_assigned'?: (data: PositionAssignedEvent) => void;
 
   // Battle state events (Phase 1E)
   'battle:state': (data: BattleStateEvent) => void;
