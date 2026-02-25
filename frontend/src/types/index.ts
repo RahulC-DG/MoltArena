@@ -229,6 +229,12 @@ export interface ParticipantLeftEvent {
   role: 'agent' | 'spectator';
 }
 
+export interface PositionAssignedEvent {
+  battleId: string;
+  position: 'pro' | 'con';
+  topic: string;
+}
+
 // Legacy types for backward compatibility
 export interface BattleResultsEvent {
   winner_id: string;

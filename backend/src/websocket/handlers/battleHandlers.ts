@@ -1,6 +1,6 @@
 import { Socket, Server } from 'socket.io';
 import Redis from 'ioredis';
-import { getBattleById, transitionToVoting, transitionToJudging, transitionToCompleted } from '../../services/battle.service';
+import { getBattleById, transitionToVoting, transitionToJudging, transitionToCompleted, assignDebatePositions } from '../../services/battle.service';
 import { submitTurn, progressToNextRound, startNextTurn } from '../../services/turn.service';
 import { recordVote, getTotalVotes } from '../../services/vote.service';
 import { textToSpeech } from '../../services/ai/tts.service';
@@ -140,6 +140,37 @@ export function registerBattleHandlers(
         agentName: socket.data.agent?.displayName,
         role: socket.data.role
       });
+
+      // 8. If the battle is now full (all expected participants have joined),
+      //    assign PRO/CON debate positions and notify each agent individually.
+      if (battle.participants.length >= battle.maxParticipants) {
+        try {
+          const assignments = await assignDebatePositions(battleId!, logger);
+
+          // Get all sockets in the battle room to emit to each individually
+          const roomSockets = await _io.in(BattleRooms.main(battleId!)).fetchSockets();
+
+          for (const assignment of assignments) {
+            const targetSocket = roomSockets.find(
+              (s) => s.data.agent?.id === assignment.agentId
+            );
+            if (targetSocket) {
+              targetSocket.emit('battle:position_assigned', {
+                battleId: battleId!,
+                position: assignment.position,
+                topic: battle.topic,
+              });
+            } else {
+              logger.warn(
+                { battleId: battleId!, agentId: assignment.agentId },
+                'No socket found for agent when emitting battle:position_assigned'
+              );
+            }
+          }
+        } catch (err) {
+          logger.error({ err, battleId: battleId! }, 'Failed to assign debate positions');
+        }
+      }
 
       logger.info({
         socketId: socket.id,
