@@ -2,234 +2,137 @@
 /**
  * MoltArena OpenClaw Bridge Agent
  *
- * Routes debate argument generation through a running OpenClaw instance.
- * Each agent position (PRO/CON) is a separate named session on the same
- * OpenClaw daemon, giving it its own conversation memory and debate context.
+ * Routes debate argument generation through the `openclaw agent` CLI.
+ * Each position (PRO/CON) maintains its own OpenClaw session for memory continuity.
+ * Uses the CLI subprocess — avoids gateway WebSocket scope issues entirely.
+ *
+ * Run:
+ *   MOLTARENA_API_KEY=... MOLTARENA_BATTLE_ID=... POSITION=pro node openclaw-agent.js
  *
  * Required env vars:
- *   MOLTARENA_API_KEY      - Agent API key from POST /api/v1/agents/register
- *   MOLTARENA_BATTLE_ID    - UUID of the battle to join
- *   OPENCLAW_TOKEN         - Bearer token for OpenClaw gateway authentication
- *   POSITION               - "pro" or "con"
- *   DEBATE_TOPIC           - The topic being debated
+ *   MOLTARENA_API_KEY   - Agent API key from POST /api/v1/agents/register
+ *   MOLTARENA_BATTLE_ID - UUID of the battle to join
+ *   POSITION            - "pro" or "con"
  *
  * Optional env vars:
- *   MOLTARENA_WS_URL       - MoltArena WebSocket URL (default: ws://backend:3000)
- *   OPENCLAW_GATEWAY_URL   - OpenClaw gateway URL (default: ws://host.docker.internal:18789)
+ *   DEBATE_TOPIC        - The topic being debated
+ *   MOLTARENA_WS_URL    - MoltArena WebSocket URL (default: ws://localhost:3000)
  */
 
-const { io } = require('socket.io-client');
-const WebSocket = require('ws');
+const { io }    = require('socket.io-client');
+const { spawn } = require('child_process');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const apiKey      = process.env.MOLTARENA_API_KEY;
-const battleId    = process.env.MOLTARENA_BATTLE_ID;
-const position    = (process.env.POSITION || 'pro').toLowerCase();
-const topic       = process.env.DEBATE_TOPIC || 'Artificial intelligence will have a net positive impact on society';
-const wsUrl       = process.env.MOLTARENA_WS_URL    || 'ws://backend:3000';
-const gatewayUrl  = process.env.OPENCLAW_GATEWAY_URL || 'ws://host.docker.internal:18789';
-const gatewayToken = process.env.OPENCLAW_TOKEN;
+const apiKey   = process.env.MOLTARENA_API_KEY;
+const battleId = process.env.MOLTARENA_BATTLE_ID;
+const position = (process.env.POSITION || 'pro').toLowerCase();
+const topic    = process.env.DEBATE_TOPIC || 'Artificial intelligence will have a net positive impact on society';
+const wsUrl    = process.env.MOLTARENA_WS_URL || 'ws://localhost:3000';
 
 if (!apiKey || !battleId) {
   console.error('[Agent] FATAL: MOLTARENA_API_KEY and MOLTARENA_BATTLE_ID are required');
   process.exit(1);
 }
-if (!gatewayToken) {
-  console.error('[Agent] FATAL: OPENCLAW_TOKEN is required (see Documentation/OPENCLAW.md Step 1)');
-  process.exit(1);
-}
 
-const sessionKey = `moltarena-${battleId}-${position}`;
-const httpBase   = wsUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
+const httpBase = wsUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
 
-// ── OpenClaw Gateway Client ────────────────────────────────────────────────────
+// ── OpenClaw CLI wrapper ───────────────────────────────────────────────────────
 
-class OpenClawGateway {
-  constructor(url, token) {
-    this.url   = url;
-    this.token = token;
-    this.ws    = null;
-    this.ready = false;
-    this.reqId = 0;
-    this.pending       = new Map(); // id → { resolve, reject }
-    this.turnListeners = new Map(); // runId → { text, resolve, reject }
-    this._connectResolve = null;
-    this._connectReject  = null;
-    this._connectTimeout = null;
-  }
-
-  nextId() { return `r${++this.reqId}`; }
-
-  connect() {
-    return new Promise((resolve, reject) => {
-      this._connectResolve = resolve;
-      this._connectReject  = reject;
-      this._connectTimeout = setTimeout(() => {
-        reject(new Error('Gateway connection timeout after 15s'));
-      }, 15000);
-
-      this.ws = new WebSocket(this.url, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
-
-      this.ws.on('open', () => {
-        console.log('[Gateway] WebSocket open, waiting for challenge...');
-      });
-
-      this.ws.on('message', (raw) => {
-        let msg;
-        try { msg = JSON.parse(raw); } catch { return; }
-        this._handle(msg);
-      });
-
-      this.ws.on('error', (err) => {
-        if (!this.ready && this._connectReject) {
-          clearTimeout(this._connectTimeout);
-          this._connectReject(err);
-          this._connectResolve = null;
-          this._connectReject  = null;
-        }
-      });
-
-      this.ws.on('close', () => {
-        this.ready = false;
-        console.log('[Gateway] Connection closed');
-      });
-    });
-  }
-
-  _handle(msg) {
-    // ── Handshake phase ────────────────────────────────────────────────────
-    if (!this.ready) {
-      if (msg.type === 'event' && msg.event === 'connect.challenge') {
-        console.log('[Gateway] Received challenge, authenticating...');
-        this._send({
-          type:   'req',
-          id:     this.nextId(),
-          method: 'connect',
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id:       'moltarena-bridge',
-              version:  '1.0.0',
-              platform: 'node',
-              mode:     'operator',
-            },
-            role:   'operator',
-            scopes: ['operator.read', 'operator.write'],
-            auth:   { token: this.token },
-          },
-        });
-      } else if (msg.type === 'res' && msg.payload?.type === 'hello-ok') {
-        this.ready = true;
-        clearTimeout(this._connectTimeout);
-        console.log('[Gateway] Connected and authenticated');
-        this._connectResolve(this);
-        this._connectResolve = null;
-        this._connectReject  = null;
-        this._connectTimeout = null;
-      }
-      return;
-    }
-
-    // ── Responses to RPC requests ──────────────────────────────────────────
-    if (msg.type === 'res' && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id);
-      this.pending.delete(msg.id);
-      if (msg.ok) resolve(msg.payload);
-      else reject(new Error(msg.error?.message || 'Gateway request failed'));
-      return;
-    }
-
-    // ── Streaming agent output ─────────────────────────────────────────────
-    if (msg.type === 'event' && msg.event === 'chat') {
-      const { runId, stream, type: evType, content } = msg.payload || {};
-      const listener = this.turnListeners.get(runId);
-      if (!listener) return;
-
-      if (stream === 'assistant' && evType === 'delta') {
-        listener.text += content || '';
-      } else if (stream === 'lifecycle' && evType === 'end') {
-        this.turnListeners.delete(runId);
-        listener.resolve(listener.text.trim());
-      } else if (stream === 'lifecycle' && evType === 'error') {
-        this.turnListeners.delete(runId);
-        listener.reject(new Error('OpenClaw agent run failed'));
-      }
-    }
-  }
-
-  _send(msg) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    }
-  }
-
-  _rpc(method, params, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-      const id = this.nextId();
-      const t  = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Gateway RPC timeout: ${method}`));
-      }, timeoutMs);
-
-      this.pending.set(id, {
-        resolve: (v) => { clearTimeout(t); resolve(v); },
-        reject:  (e) => { clearTimeout(t); reject(e); },
-      });
-      this._send({ type: 'req', id, method, params });
-    });
-  }
-
+class OpenClawCLI {
   /**
-   * Send a message to the OpenClaw agent session and wait for the full response.
-   * Uses agent.request to start a run, then listens for streaming events.
+   * Stateless per-call wrapper — embeds the debate persona context in every
+   * message so PRO and CON never pollute each other's session memory.
+   *
+   * @param {string} pos   - 'pro' or 'con'
+   * @param {string} topic - debate topic
    */
-  async ask(message, timeoutMs = 55000) {
-    const result = await this._rpc('agent.request', {
-      message,
-      sessionKey:     this.sessionKey,
-      deliver:        false,
-      timeoutSeconds: Math.floor(timeoutMs / 1000),
-    });
+  constructor(pos, topic) {
+    this.agentName = pos === 'pro' ? 'debate-pro' : 'debate-con';
+    const side = pos === 'pro' ? 'STRONGLY IN FAVOR OF' : 'STRONGLY AGAINST';
+    this.prefix = [
+      `You are a skilled competitive debater. Your position is ${side} this topic: "${topic}".`,
+      `You must hold the ${pos.toUpperCase()} position exclusively.`,
+      `Respond with compelling, evidence-based arguments of 2–4 sentences.`,
+      `When the opponent has spoken, acknowledge their key point before rebutting it.`,
+      `Never concede the debate.\n`,
+    ].join(' ');
+  }
 
-    const { runId } = result;
-    console.log(`[Gateway] Agent run started: ${runId}`);
-
+  ask(message, timeoutMs = 60000) {
+    // Prepend the role context so every call is self-contained
+    const fullMessage = this.prefix + message;
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => {
-        this.turnListeners.delete(runId);
-        reject(new Error('OpenClaw response timeout'));
+      const args = ['agent', '--agent', this.agentName, '--message', fullMessage, '--json'];
+
+      console.log(`[OpenClaw] openclaw agent --agent ${this.agentName} --message "${message.substring(0, 60)}..."`);
+
+      const proc  = spawn('openclaw', args, { env: process.env });
+      let stdout  = '';
+      let stderr  = '';
+
+      const timer = setTimeout(() => {
+        proc.kill();
+        reject(new Error('OpenClaw CLI timeout'));
       }, timeoutMs);
 
-      this.turnListeners.set(runId, {
-        text:    '',
-        resolve: (text) => { clearTimeout(t); resolve(text); },
-        reject:  (err)  => { clearTimeout(t); reject(err);   },
+      proc.stdout.on('data', (d) => { stdout += d; });
+      proc.stderr.on('data', (d) => { stderr += d; });
+
+      proc.on('error', (err) => {
+        clearTimeout(timer);
+        reject(new Error(`openclaw CLI spawn error: ${err.message}`));
+      });
+
+      proc.on('close', (code) => {
+        clearTimeout(timer);
+
+        if (code !== 0) {
+          console.error(`[OpenClaw] CLI exited ${code}: ${stderr.trim().substring(0, 300)}`);
+          reject(new Error(`openclaw agent failed (exit ${code})`));
+          return;
+        }
+
+        // Parse response — try JSON first, fall back to raw text
+        // Gateway mode: { result: { payloads: [{text}] } }
+        // Local mode:   { payloads: [{text}] }
+        let text = '';
+        try {
+          const json = JSON.parse(stdout.trim());
+          text = json.result?.payloads?.[0]?.text
+              ?? json.payloads?.[0]?.text
+              ?? json.text ?? json.response ?? json.message
+              ?? json.content ?? json.output ?? '';
+        } catch {
+          // Not JSON — use raw stdout
+          text = stdout.trim();
+        }
+
+        if (!text) {
+          // Log raw output to help debug unknown response format
+          console.error(`[OpenClaw] Empty response. Raw stdout: ${stdout.substring(0, 300)}`);
+          reject(new Error('OpenClaw returned empty response'));
+          return;
+        }
+
+        console.log(`[OpenClaw] Generated (${text.length} chars): "${text.substring(0, 80)}..."`);
+        resolve(text);
       });
     });
   }
 }
 
-// ── REST: register as battle participant ───────────────────────────────────────
+// ── REST: join as battle participant ──────────────────────────────────────────
 
 async function joinBattleViaRest() {
   try {
     const res = await fetch(`${httpBase}/api/v1/battles/${battleId}/join`, {
       method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({}),
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body:    JSON.stringify({}),
     });
 
-    if (res.ok) {
-      console.log('[Agent] Registered as participant via REST API');
-      return;
-    }
+    if (res.ok) { console.log('[Agent] Registered as participant via REST API'); return; }
 
     const body = await res.json().catch(() => ({}));
     if (body.error?.code === 'ALREADY_PARTICIPANT') {
@@ -246,40 +149,23 @@ async function joinBattleViaRest() {
 
 async function main() {
   console.log(`[Agent] Starting — position: ${position.toUpperCase()}, topic: "${topic}"`);
-  console.log(`[Agent] OpenClaw session key: ${sessionKey}`);
 
-  // 1. Register as participant before WebSocket join
+  // 1. Register as battle participant
   await joinBattleViaRest();
 
-  // 2. Connect to OpenClaw gateway
-  console.log(`[Agent] Connecting to OpenClaw gateway: ${gatewayUrl}`);
-  const gateway = new OpenClawGateway(gatewayUrl, gatewayToken);
-  gateway.sessionKey = sessionKey;
-  await gateway.connect();
+  // 2. Initialize OpenClaw CLI (persona context embedded in every call)
+  const openclaw = new OpenClawCLI(position, topic);
+  console.log(`[Agent] OpenClaw ready — role context embedded in every turn`);
 
-  // 3. Prime the debate persona for this session
-  const side    = position === 'pro' ? 'STRONGLY IN FAVOR OF' : 'STRONGLY AGAINST';
-  const initMsg = [
-    `You are a skilled competitive debater. Your position is ${side} this topic: "${topic}".`,
-    `You must hold the ${position.toUpperCase()} position exclusively throughout this debate.`,
-    `When I ask you to "generate your argument", respond with a compelling, evidence-based`,
-    `argument of 2–4 sentences. When the opponent has spoken, acknowledge their key point`,
-    `before rebutting it. Never concede the debate. Confirm you understand your role.`,
-  ].join(' ');
-
-  console.log('[Agent] Initializing debate persona in OpenClaw...');
-  const ack = await gateway.ask(initMsg, 30000);
-  console.log(`[Agent] Persona confirmed: "${ack.substring(0, 80)}..."`);
-
-  // 4. Connect to MoltArena and run the debate
+  // 3. Connect to MoltArena and run the debate
   const turnHistory = [];
 
   console.log(`[Agent] Connecting to MoltArena: ${wsUrl}`);
   const socket = io(wsUrl, {
-    auth:               { token: apiKey },
-    transports:         ['websocket'],
+    auth:                 { token: apiKey },
+    transports:           ['websocket'],
     reconnectionAttempts: 5,
-    reconnectionDelay:  2000,
+    reconnectionDelay:    2000,
   });
 
   socket.on('connect', () => {
@@ -296,8 +182,35 @@ async function main() {
     console.error('[Agent] MoltArena connection failed:', err.message);
   });
 
+  async function tryStartBattle() {
+    if (position !== 'pro') return; // only host starts
+    try {
+      const res = await fetch(`${httpBase}/api/v1/battles/${battleId}/start`, {
+        method:  'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log('[Agent] Battle start triggered');
+      } else {
+        console.log(`[Agent] Start attempt: ${body.error?.message || body.error?.code || res.status}`);
+      }
+    } catch (err) {
+      console.warn('[Agent] Failed to trigger battle start:', err.message);
+    }
+  }
+
   socket.on('battle:connected', (data) => {
-    console.log(`[Agent] Joined battle — status: ${data.status}`);
+    console.log(`[Agent] Joined battle — state: ${data.state}, participants: ${data.participants?.length}/${data.config?.maxParticipants}`);
+    // Auto-start if already full (e.g. reconnect scenario)
+    if (data.participants?.length >= data.config?.maxParticipants) {
+      tryStartBattle();
+    }
+  });
+
+  socket.on('battle:participant_joined', (data) => {
+    console.log(`[Agent] Participant joined: ${data.agentName} (${data.role})`);
+    tryStartBattle(); // PRO tries to start; silently fails if not enough participants yet
   });
 
   socket.on('battle:starting', (data) => {
@@ -311,11 +224,9 @@ async function main() {
         ? buildTurnPrompt(turnHistory)
         : 'Generate your opening argument now.';
 
-      const argument = await gateway.ask(prompt);
+      const argument = await openclaw.ask(prompt);
 
-      if (!argument) throw new Error('OpenClaw returned empty response');
-
-      console.log(`[Agent] OpenClaw generated (${argument.length} chars): "${argument.substring(0, 80)}..."`);
+      console.log(`[Agent] Submitting argument (${argument.length} chars)`);
       socket.emit('battle:submit_turn', { battleId, content: argument });
       turnHistory.push({ role: position, content: argument });
     } catch (err) {
@@ -323,9 +234,7 @@ async function main() {
     }
   });
 
-  socket.on('battle:turn_accepted', () => {
-    console.log('[Agent] Turn accepted by MoltArena');
-  });
+  socket.on('battle:turn_accepted', () => { console.log('[Agent] Turn accepted'); });
 
   socket.on('battle:turn', (data) => {
     const opponentRole = position === 'pro' ? 'con' : 'pro';
@@ -356,20 +265,13 @@ async function main() {
     process.exit(0);
   });
 
-  socket.on('error', (err) => {
-    console.error('[Agent] MoltArena error:', err.message, err.code);
-  });
-
+  socket.on('error',      (err)    => { console.error('[Agent] MoltArena error:', err.message, err.code); });
   socket.on('disconnect', (reason) => {
     console.log('[Agent] Disconnected:', reason);
     if (reason === 'io server disconnect') process.exit(0);
   });
 
-  process.on('SIGINT', () => {
-    socket.disconnect();
-    gateway.ws?.close();
-    process.exit(0);
-  });
+  process.on('SIGINT', () => { socket.disconnect(); process.exit(0); });
 }
 
 function buildTurnPrompt(history) {

@@ -135,6 +135,7 @@ export function BattleViewerPhase1E({ battleId, token }: BattleViewerPhase1EProp
     };
     const mappedState = stateMap[data.state] || 'lobby';
     setBattleState(mappedState);
+    if (mappedState === 'voting') setVotingOpen(true);
 
     // Fetch all participant agent data
     const participantAgentIds = data.participants
@@ -543,6 +544,21 @@ export function BattleViewerPhase1E({ battleId, token }: BattleViewerPhase1EProp
                 judgeDecision={judgeDecision}
                 votes={voteResults}
               />
+            </div>
+          </div>
+        )}
+
+        {/* Completed fallback — joined after battle ended, no results available */}
+        {battleState === 'completed' && (!judgeDecision || !voteResults) && (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center max-w-md">
+              <Swords className="w-16 h-16 text-muted-foreground/50 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-foreground mb-2">
+                Battle Has Ended
+              </h2>
+              <p className="text-muted-foreground">
+                Results are unavailable. The battle may have ended before you joined.
+              </p>
             </div>
           </div>
         )}
