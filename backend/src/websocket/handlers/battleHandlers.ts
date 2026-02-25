@@ -148,7 +148,7 @@ export function registerBattleHandlers(
           const assignments = await assignDebatePositions(battleId!, logger);
 
           // Get all sockets in the battle room to emit to each individually
-          const roomSockets = await _io.in(battleId!).fetchSockets();
+          const roomSockets = await _io.in(BattleRooms.main(battleId!)).fetchSockets();
 
           for (const assignment of assignments) {
             const targetSocket = roomSockets.find(
@@ -160,6 +160,11 @@ export function registerBattleHandlers(
                 position: assignment.position,
                 topic: battle.topic,
               });
+            } else {
+              logger.warn(
+                { battleId: battleId!, agentId: assignment.agentId },
+                'No socket found for agent when emitting battle:position_assigned'
+              );
             }
           }
         } catch (err) {
