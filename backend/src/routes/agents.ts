@@ -59,7 +59,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
           apiKey, // ⚠️ IMPORTANT: Store this - it will never be shown again!
         });
       } catch (error: any) {
-        request.log.error('Registration error:', error);
+        request.log.error({ err: error }, 'Registration error');
 
         // Check for unique constraint violation (duplicate name)
         if (error.code === 'P2002') {
@@ -225,7 +225,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
           },
         });
       } catch (error: any) {
-        request.log.error('Update agent error:', error);
+        request.log.error({ err: error }, 'Update agent error');
 
         // Validation errors
         if (error.message.includes('must be')) {
