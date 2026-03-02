@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { agentRoutes } from './routes/agents';
@@ -42,6 +43,23 @@ redis.on('ready', () => {
 
 // Socket.io instance (initialized in start function)
 let io: any;
+
+// CORS — allow frontend origin (env var for production, localhost for dev)
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+].filter(Boolean) as string[];
+
+server.register(cors, {
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true,
+});
 
 // Register API routes
 server.register(agentRoutes);
