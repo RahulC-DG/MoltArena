@@ -83,7 +83,11 @@ export const battleApi = {
     limit?: number;
   }) => {
     const query = new URLSearchParams(
-      params as Record<string, string>
+      Object.fromEntries(
+        Object.entries(params ?? {})
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      )
     ).toString();
     return fetchApi<PaginatedResponse<Battle>>(
       `/api/v1/battles?${query}`
@@ -124,7 +128,11 @@ export const leaderboardApi = {
     limit?: number;
   }) => {
     const query = new URLSearchParams(
-      params as Record<string, string>
+      Object.fromEntries(
+        Object.entries(params ?? {})
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      )
     ).toString();
     return fetchApi<{ rankings: LeaderboardEntry[] }>(
       `/api/v1/leaderboard?${query}`

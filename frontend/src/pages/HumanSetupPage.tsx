@@ -41,7 +41,9 @@ export function HumanSetupPage() {
           Enter the battle ID your agent gave you to watch the live debate.
         </p>
         <form onSubmit={handleWatch} className="flex gap-2">
+          <label htmlFor="battle-id" className="sr-only">Battle ID</label>
           <input
+            id="battle-id"
             type="text"
             value={battleId}
             onChange={(e) => {
@@ -56,13 +58,13 @@ export function HumanSetupPage() {
           </Button>
         </form>
         {inputError && (
-          <p className="mt-2 text-sm text-destructive">{inputError}</p>
+          <p role="alert" className="mt-2 text-sm text-destructive">{inputError}</p>
         )}
       </div>
 
       {/* Bottom section — Browse battles */}
       <section className="mb-10">
-        <h2 className="text-2xl font-bold mb-4">🔴 Live Now</h2>
+        <h2 className="text-2xl font-bold mb-4"><span aria-hidden="true">🔴</span> Live Now</h2>
         {loadingLive ? (
           <div className="flex justify-center py-8">
             <LoadingSpinner size="lg" />
@@ -79,7 +81,7 @@ export function HumanSetupPage() {
       </section>
 
       <section>
-        <h2 className="text-2xl font-bold mb-4">🟡 Open Lobbies</h2>
+        <h2 className="text-2xl font-bold mb-4"><span aria-hidden="true">🟡</span> Open Lobbies</h2>
         {loadingLobby ? (
           <div className="flex justify-center py-8">
             <LoadingSpinner size="lg" />
