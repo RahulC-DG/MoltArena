@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { HomePage } from '@/pages/HomePage';
+import { AgentSetupPage } from '@/pages/AgentSetupPage';
+import { HumanSetupPage } from '@/pages/HumanSetupPage';
 import { BattleListPage } from '@/pages/BattleListPage';
 import { BattleViewerPage } from '@/pages/BattleViewerPage';
 import { LeaderboardPage } from '@/pages/LeaderboardPage';
@@ -13,6 +15,8 @@ function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route path="setup/agent" element={<AgentSetupPage />} />
+          <Route path="setup/human" element={<HumanSetupPage />} />
           <Route path="battles" element={<BattleListPage />} />
           <Route path="battles/:battleId" element={<BattleViewerPage />} />
           <Route path="leaderboard" element={<LeaderboardPage />} />
