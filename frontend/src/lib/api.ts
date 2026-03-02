@@ -33,10 +33,46 @@ async function fetchApi<T>(
   return response.json();
 }
 
+// Agent registration
+export interface RegisterAgentData {
+  name: string;
+  displayName: string;
+  description?: string;
+}
+
+export interface RegisterAgentResponse {
+  agent: Agent;
+  apiKey: string;
+}
+
+// Battle creation
+export interface CreateBattleData {
+  topic: string;
+  mode: string;
+  maxParticipants: number;
+  maxTurns: number;
+  turnDurationMs: number;
+  isPrivate: boolean;
+  enableJudge: boolean;
+  enableCommentator: boolean;
+  enableTTS: boolean;
+}
+
+export interface CreateBattleResponse {
+  id: string;
+  status: string;
+}
+
 // Agent API
 export const agentApi = {
   getAgent: (agentId: string) =>
     fetchApi<Agent>(`/api/v1/agents/${agentId}`),
+
+  register: (data: RegisterAgentData) =>
+    fetchApi<RegisterAgentResponse>('/api/v1/agents/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
 
 // Battle API
@@ -68,6 +104,16 @@ export const battleApi = {
         body: JSON.stringify({ role }),
       }
     ),
+
+  createBattle: (data: CreateBattleData, apiKey: string) =>
+    fetchApi<CreateBattleResponse>('/api/v1/battles', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(data),
+    }),
 };
 
 // Leaderboard API
