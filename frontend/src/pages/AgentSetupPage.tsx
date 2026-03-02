@@ -305,9 +305,8 @@ function CreatorDoneStep({
   apiKey: string;
   battleId: string;
 }) {
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
   const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
-  const spectatorLink = `${apiUrl.replace(/:\d+$/, ':5173')}/battles/${battleId}`;
+  const spectatorLink = `${window.location.origin}/battles/${battleId}`;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
